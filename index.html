@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The confocal pinhole</title>
+<style>
+  :root{
+    --bg:#1a2133; --panel:#252e45; --panel2:#2d3752; --line:#3b4766;
+    --text:#d8dde8; --muted:#9aa5bd; --accent:#4fd1c5;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+       display:flex;flex-direction:column;overflow:hidden;font-size:13px}
+  header{flex:0 0 auto;display:flex;justify-content:space-between;align-items:center;padding:6px 16px;border-bottom:1px solid var(--line)}
+  header h1{margin:0;font-size:1rem;font-weight:600}
+  .tools{display:flex;gap:6px;align-items:center;color:var(--muted)}
+  .tools input[type=number]{width:52px;background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:4px;padding:2px 5px}
+  .tools button{background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:4px;padding:2px 8px;cursor:pointer}
+  main{flex:1;min-height:0;display:flex;gap:12px;padding:10px 16px}
+
+  .focusCol{flex:0 0 46px;display:flex;flex-direction:column;align-items:center;gap:6px;
+            background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 0}
+  .focusCol input[type=range]{writing-mode:vertical-lr;direction:rtl;flex:1;min-height:0;width:26px;margin:0;accent-color:var(--accent)}
+  .focusCol b{color:var(--accent);font-variant-numeric:tabular-nums;font-size:.8rem}
+  .focusCol span{color:var(--muted);font-size:.75rem}
+
+  .viewCol{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}
+  .imgwrap{flex:1;min-height:0;background:#000;border:1px solid var(--line);border-radius:8px;overflow:hidden;position:relative;cursor:zoom-in;user-select:none}
+  .imgwrap.zoomed{cursor:grab}
+  .imgwrap.dragging{cursor:grabbing}
+  #view{position:absolute;left:0;top:0;width:100%;height:100%;display:block}
+  #fallback{display:none;position:absolute;inset:0;align-items:center;justify-content:center;background:#0b0f19;z-index:2}
+  #fallback label{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:8px 14px;cursor:pointer}
+  #fallback input{display:none}
+  #legend{position:absolute;top:8px;right:10px;z-index:1;pointer-events:none;background:rgba(10,14,24,.6);
+          border-radius:6px;padding:4px 8px;font-size:.78rem;display:flex;flex-direction:column;gap:3px}
+  #legend div{display:flex;align-items:center;gap:6px}
+  .sw{display:inline-block;width:11px;height:11px;border-radius:50%}
+  .caption{flex:0 0 auto;font-size:.75rem;color:var(--muted);text-align:center;padding:2px 0}
+  .caption a{color:var(--accent)}
+
+  .side{flex:0 0 clamp(250px,30vw,340px);display:flex;flex-direction:column;gap:10px;min-height:0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-height:0;
+        display:flex;flex-direction:column;position:relative}
+  #irisCard{flex:1.3}
+  #histCard{flex:.9}
+  .plot{flex:1;min-height:0;position:relative}
+  .plot canvas{position:absolute;inset:0;width:100%;height:100%}
+  .logchk{position:absolute;top:6px;right:10px;font-size:.72rem;color:var(--muted);display:flex;gap:4px;align-items:center;z-index:1}
+
+  .row{flex:0 0 auto;margin-top:8px}
+  .lab{display:flex;justify-content:space-between;align-items:center;margin-bottom:2px}
+  .lab b{color:var(--accent);font-variant-numeric:tabular-nums;min-width:58px;text-align:right}
+  .chk{display:flex;align-items:center;gap:4px;color:var(--muted);font-size:.8rem;cursor:pointer}
+  .row input[type=range]{width:100%;margin:0;accent-color:var(--accent)}
+  .row input[type=range]:disabled{opacity:.45}
+
+  @media (max-width:700px){
+    body{overflow:auto}
+    main{flex-direction:column}
+    .side{flex:none;height:60vh}
+    .viewCol{flex:none;height:50vh}
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>The role of the pinhole in a confocal microscope</h1>
+  <div class="tools">Slices <input type="number" id="nOverride" min="1" placeholder="auto"><button id="reload" title="Reload images">⟳</button></div>
+</header>
+
+<main>
+  <div class="focusCol" id="focusCol">
+    <span>Focus</span>
+    <input type="range" id="focus" min="1" max="29" step="1" value="15">
+    <b id="focusVal"></b>
+  </div>
+
+  <div class="viewCol">
+    <div class="imgwrap" id="imgwrap">
+      <canvas id="view" width="10" height="10"></canvas>
+      <div id="legend">
+        <div><span class="sw" style="background:#3ff0f0"></span>Nuclei</div>
+        <div><span class="sw" style="background:#ff4bd8"></span>Nucleoli</div>
+      </div>
+      <div id="fallback"><label>Select images… <input type="file" id="files" accept="image/*" multiple></label></div>
+    </div>
+    <div class="caption">Meaburn KJ, Misteli T (2008) <i>J Cell Biol</i> 180:39–50. <a href="https://www.cellimagelibrary.org/images/13383" target="_blank" rel="noopener">CIL:13383, Homo sapiens, mammary epithelium (MEC). Cell Image Library. doi:10.7295/W9CIL13383</a></div>
+  </div>
+
+  <div class="side">
+    <div class="card" id="irisCard">
+      <div class="plot" id="irisPlot"><canvas id="ph"></canvas></div>
+      <div class="row" id="rowPin">
+        <div class="lab"><span>Pinhole</span><b id="phVal"></b></div>
+        <input type="range" id="pinhole" min="0" max="10" step="0.05" value="10">
+      </div>
+    </div>
+
+    <div class="card" id="histCard">
+      <label class="logchk"><input type="checkbox" id="logHist" checked>log</label>
+      <div class="plot" id="histPlot"><canvas id="hist"></canvas></div>
+      <div class="row" id="rowPow">
+        <div class="lab"><span>Laser power</span>
+          <label class="chk"><input type="checkbox" id="auto">auto adjust laser</label>
+          <b id="pwVal"></b></div>
+        <input type="range" id="power" min="0" max="10" step="0.1" value="4">
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+/* ============ Tunable constants ============ */
+const CONFIG = {
+  imageFolder: 'images/',
+  extension: 'png',
+  maxSlicesProbe: 500,
+  maxWorkingWidth: 512,     // working resolution (smaller = faster)
+  maxLevel: 5,              // coarsest blur level (image shrunk by 2^5)
+  blurPerSlice: 0.8,        // blur level grows as log2(1 + distance * this)
+  spreadPerAU: 0.7,         // sigma of the weighting (in slices) per Airy unit above 1 AU
+  satPowerAt1AU: 8,         // laser % at which the brightest pixel saturates at 1 AU
+  autoTarget: 250,          // auto mode scales the brightest pixel to this value
+  minWeight: 0.003,
+  maxZoom: 16
+};
+
+/* ============ State ============ */
+let levels = [];            // levels[slice][L] = Uint8ClampedArray RGBA
+let W = 0, H = 0, N = 0;
+let LW = [], LH = [];
+let accL = [], smallImg = [], smallCanvas = [], upCanvas = null, upCtx = null;
+let fin = null, outImg = null, lastBins = null;
+let Z = { z: 1, x: 0, y: 0 };   // zoom and canvas offset within the image frame
+
+const $ = id => document.getElementById(id);
+const view = $('view'), vctx = view.getContext('2d');
+const imgwrap = $('imgwrap');
+
+/* ============ Loading ============ */
+function loadImg(src){
+  return new Promise(res => {
+    const im = new Image();
+    im.onload = () => res(im);
+    im.onerror = () => res(null);
+    im.src = src;
+  });
+}
+
+function buildLevels(im){
+  if (!W){
+    const s = Math.min(1, CONFIG.maxWorkingWidth / im.naturalWidth);
+    W = Math.round(im.naturalWidth * s); H = Math.round(im.naturalHeight * s);
+    for (let L = 0; L <= CONFIG.maxLevel; L++){
+      LW[L] = Math.max(1, Math.round(W / (1 << L)));
+      LH[L] = Math.max(1, Math.round(H / (1 << L)));
+    }
+  }
+  const out = [];
+  let prev = document.createElement('canvas'); prev.width = W; prev.height = H;
+  let x = prev.getContext('2d', {willReadFrequently:true});
+  x.drawImage(im, 0, 0, W, H);
+  out.push(x.getImageData(0, 0, W, H).data);   // throws if the canvas is tainted
+  for (let L = 1; L <= CONFIG.maxLevel; L++){
+    const c = document.createElement('canvas'); c.width = LW[L]; c.height = LH[L];
+    const cx = c.getContext('2d', {willReadFrequently:true});
+    cx.imageSmoothingQuality = 'high';
+    cx.drawImage(prev, 0, 0, LW[L], LH[L]);
+    out.push(cx.getImageData(0, 0, LW[L], LH[L]).data);
+    prev = c;
+  }
+  return out;
+}
+
+async function loadStack(urls){
+  levels = []; W = H = 0; N = 0;
+  for (let i = 0; i < urls.length; i++){
+    const im = await loadImg(urls[i]);
+    if (!im) break;
+    try { levels.push(buildLevels(im)); }
+    catch(e){ $('fallback').style.display = 'flex'; return false; }
+  }
+  return finish();
+}
+
+function finish(){
+  N = levels.length;
+  if (!N){ $('fallback').style.display = 'flex'; return false; }
+  $('fallback').style.display = 'none';
+  view.width = W; view.height = H;
+  outImg = vctx.createImageData(W, H);
+  fin = new Float32Array(W*H*3);
+  accL = []; smallImg = []; smallCanvas = [];
+  for (let L = 1; L <= CONFIG.maxLevel; L++){
+    accL[L] = new Float32Array(LW[L]*LH[L]*3);
+    smallImg[L] = new ImageData(LW[L], LH[L]);
+    const c = document.createElement('canvas'); c.width = LW[L]; c.height = LH[L];
+    smallCanvas[L] = c;
+  }
+  upCanvas = document.createElement('canvas'); upCanvas.width = W; upCanvas.height = H;
+  upCtx = upCanvas.getContext('2d', {willReadFrequently:true});
+  upCtx.imageSmoothingEnabled = true; upCtx.imageSmoothingQuality = 'high';
+  const f = $('focus'); f.max = N; f.value = Math.ceil(N/2);
+  resetView();
+  schedule();
+  return true;
+}
+
+function urlList(){
+  const n = parseInt($('nOverride').value);
+  const max = n > 0 ? n : CONFIG.maxSlicesProbe;
+  const arr = [];
+  // Files are 00.png, 01.png, ... 28.png (29 slices)
+  for (let i = 0; i < max; i++) arr.push(CONFIG.imageFolder + String(i).padStart(2, '0') + '.' + CONFIG.extension);
+  return arr;
+}
+
+$('reload').onclick = () => loadStack(urlList());
+$('files').onchange = async e => {
+  const num = f => parseInt((f.name.match(/\d+/) || [0])[0]);
+  const files = [...e.target.files].sort((a, b) => num(a) - num(b));
+  await loadStack(files.map(f => URL.createObjectURL(f)));
+};
+
+/* ============ Zoom and pan ============ */
+function baseSize(){
+  const wr = imgwrap.clientWidth, hr = imgwrap.clientHeight;
+  if (!W || !H || !wr || !hr) return null;
+  const ar = W / H;
+  let bw, bh;
+  if (wr / hr > ar){ bh = hr; bw = hr * ar; } else { bw = wr; bh = wr / ar; }
+  return { wr, hr, bw, bh };
+}
+
+function clampView(){
+  const b = baseSize(); if (!b) return;
+  const dw = b.bw * Z.z, dh = b.bh * Z.z;
+  if (dw <= b.wr) Z.x = (b.wr - dw) / 2;
+  else Z.x = Math.min(0, Math.max(b.wr - dw, Z.x));
+  if (dh <= b.hr) Z.y = (b.hr - dh) / 2;
+  else Z.y = Math.min(0, Math.max(b.hr - dh, Z.y));
+  view.style.width  = dw + 'px';
+  view.style.height = dh + 'px';
+  view.style.left   = Z.x + 'px';
+  view.style.top    = Z.y + 'px';
+  imgwrap.classList.toggle('zoomed', Z.z > 1.001);
+}
+
+function resetView(){ Z = { z: 1, x: 0, y: 0 }; clampView(); }
+
+imgwrap.addEventListener('wheel', e => {
+  if (!W) return;
+  e.preventDefault();
+  const r = imgwrap.getBoundingClientRect();
+  const mx = e.clientX - r.left, my = e.clientY - r.top;
+  const nz = Math.min(CONFIG.maxZoom, Math.max(1, Z.z * Math.exp(-e.deltaY * 0.0015)));
+  const ix = (mx - Z.x) / Z.z, iy = (my - Z.y) / Z.z;
+  Z.z = nz;
+  Z.x = mx - ix * nz;
+  Z.y = my - iy * nz;
+  clampView();
+}, { passive: false });
+
+let drag = null;
+imgwrap.addEventListener('pointerdown', e => {
+  if (Z.z <= 1.001) return;
+  drag = { x: e.clientX, y: e.clientY };
+  imgwrap.classList.add('dragging');
+  imgwrap.setPointerCapture(e.pointerId);
+});
+imgwrap.addEventListener('pointermove', e => {
+  if (!drag) return;
+  Z.x += e.clientX - drag.x; Z.y += e.clientY - drag.y;
+  drag = { x: e.clientX, y: e.clientY };
+  clampView();
+});
+imgwrap.addEventListener('pointerup', () => { drag = null; imgwrap.classList.remove('dragging'); });
+imgwrap.addEventListener('dblclick', resetView);
+new ResizeObserver(() => resetView()).observe(imgwrap);
+
+/* ============ Rendering ============ */
+let pending = false;
+function schedule(){ if (!pending){ pending = true; requestAnimationFrame(() => { pending = false; render(); }); } }
+
+function render(){
+  const f = parseInt($('focus').value) - 1;
+  const P = parseFloat($('pinhole').value);
+  const auto = $('auto').checked;
+
+  $('focusVal').textContent = (f+1) + '/' + (N || '–');
+  $('phVal').textContent = P.toFixed(2) + ' AU';
+  drawIris(P);
+  if (!N) return;
+
+  // Which slices contribute, at which blur level
+  const lists = Array.from({length: CONFIG.maxLevel + 1}, () => []);
+  lists[0].push({ j: f, w: 1 });
+  const sigmaZ = Math.max(0, P - 1) * CONFIG.spreadPerAU;
+  if (sigmaZ > 0){
+    for (let d = 1; d < N; d++){
+      const wt = Math.exp(-(d*d) / (2*sigmaZ*sigmaZ));
+      if (wt < CONFIG.minWeight) break;
+      const lf = Math.min(CONFIG.maxLevel, Math.log2(1 + d * CONFIG.blurPerSlice));
+      const L0 = Math.floor(lf), fr = lf - L0;
+      for (const j of [f - d, f + d]){
+        if (j < 0 || j >= N) continue;
+        lists[L0].push({ j, w: wt * (1 - fr) });
+        if (fr > 0 && L0 < CONFIG.maxLevel) lists[L0 + 1].push({ j, w: wt * fr });
+      }
+    }
+  }
+
+  // Level 0 (full resolution)
+  fin.fill(0);
+  for (const p of lists[0]){
+    const d = levels[p.j][0], w = p.w;
+    for (let i = 0, k = 0, n = W*H; i < n; i++, k += 3){
+      const s = i*4;
+      fin[k] += d[s]*w; fin[k+1] += d[s+1]*w; fin[k+2] += d[s+2]*w;
+    }
+  }
+  // Blurred levels: accumulate small, upscale once, add
+  for (let L = 1; L <= CONFIG.maxLevel; L++){
+    const list = lists[L]; if (!list.length) continue;
+    const acc = accL[L], n = LW[L]*LH[L];
+    acc.fill(0);
+    let tw = 0;
+    for (const p of list){
+      const d = levels[p.j][L], w = p.w; tw += w;
+      for (let i = 0, k = 0; i < n; i++, k += 3){
+        const s = i*4;
+        acc[k] += d[s]*w; acc[k+1] += d[s+1]*w; acc[k+2] += d[s+2]*w;
+      }
+    }
+    const si = smallImg[L], sd = si.data, inv = 1 / tw;
+    for (let i = 0, k = 0; i < n; i++, k += 3){
+      const s = i*4;
+      sd[s] = acc[k]*inv; sd[s+1] = acc[k+1]*inv; sd[s+2] = acc[k+2]*inv; sd[s+3] = 255;
+    }
+    smallCanvas[L].getContext('2d').putImageData(si, 0, 0);
+    upCtx.drawImage(smallCanvas[L], 0, 0, W, H);
+    const up = upCtx.getImageData(0, 0, W, H).data;
+    for (let i = 0, k = 0, m = W*H; i < m; i++, k += 3){
+      const s = i*4;
+      fin[k] += up[s]*tw; fin[k+1] += up[s+1]*tw; fin[k+2] += up[s+2]*tw;
+    }
+  }
+
+  // Brightness
+  const area = P < 1 ? P*P : 1;
+  let gain, power;
+  if (auto){
+    // Scale so the brightest pixel sits at autoTarget: constant exposure, histogram fills
+    let M = 0;
+    for (let k = 0, n = W*H*3; k < n; k++) if (fin[k] > M) M = fin[k];
+    const want = M > 0 ? CONFIG.autoTarget / M : 0;           // gain needed for constant exposure
+    power = area > 0 ? Math.min(10, want * CONFIG.satPowerAt1AU / area) : 0;  // capped at laser max; 0 AU = no light
+    gain = (power / CONFIG.satPowerAt1AU) * area;
+    $('power').value = power;
+  } else {
+    power = parseFloat($('power').value);
+    gain = (power / CONFIG.satPowerAt1AU) * area;
+  }
+  $('pwVal').textContent = power.toFixed(1) + ' %';
+
+  // Apply gain, mark saturation, build histogram
+  const out = outImg.data;
+  const bins = new Uint32Array(256);
+  for (let i = 0, k = 0, n = W*H; i < n; i++, k += 3){
+    const r = fin[k]*gain, g = fin[k+1]*gain, b = fin[k+2]*gain;
+    const m = r > g ? (r > b ? r : b) : (g > b ? g : b);
+    const s = i*4;
+    if (m >= 255){ out[s] = 255; out[s+1] = 0; out[s+2] = 0; bins[255]++; }
+    else { out[s] = r; out[s+1] = g; out[s+2] = b; bins[Math.round(m)]++; }
+    out[s+3] = 255;
+  }
+  vctx.putImageData(outImg, 0, 0);
+  lastBins = bins;
+  drawHist();
+}
+
+/* ============ Camera-style iris ============ */
+function drawIris(P){
+  const c = $('ph'), x = c.getContext('2d'), w = c.width, h = c.height;
+  x.clearRect(0, 0, w, h);
+  if (!w || !h) return;
+  const S = Math.min(w, h), cx = w/2, cy = h/2;
+  const Rout = S * 0.46;                       // radius of the blade disc
+  const AU = S * 0.0782;                       // pixel diameter of 1 Airy unit
+  const R = P * AU / 2;                        // apothem of the opening
+  const NB = 8, step = 2*Math.PI/NB;
+  const rot = (10 - P) * 0.05;                 // blades twist as the iris moves
+  const Rv = R / Math.cos(Math.PI/NB);         // radius of the opening's corners
+
+  x.save();
+  x.translate(cx, cy);
+
+  // housing
+  x.fillStyle = '#323c57';
+  x.beginPath(); x.arc(0, 0, Rout + S*0.03, 0, Math.PI*2); x.fill();
+
+  // blades: fill the disc, then draw seams from each corner of the opening out to the rim
+  x.save();
+  x.beginPath(); x.arc(0, 0, Rout, 0, Math.PI*2); x.clip();
+  x.fillStyle = '#56627f'; x.fillRect(-w, -h, 2*w, 2*h);
+  x.strokeStyle = '#2b344d'; x.lineWidth = Math.max(1, S*0.006); x.lineCap = 'round';
+  // Each seam is the straight continuation of an opening edge past its corner,
+  // so the leaves stay aligned with the opening at every aperture size.
+  const L = Rout * 3;
+  for (let i = 0; i < NB; i++){
+    const phi = rot + i*step;                  // normal angle of opening edge i
+    const tx = -Math.sin(phi), ty = Math.cos(phi);   // edge direction (counter-clockwise)
+    const cA = phi + step/2;                   // corner at the end of edge i
+    const sx = Rv*Math.cos(cA), sy = Rv*Math.sin(cA);
+    x.beginPath(); x.moveTo(sx, sy); x.lineTo(sx + tx*L, sy + ty*L); x.stroke();
+  }
+  x.restore();
+
+  // opening (only when open): dark interior, out-of-focus halo and in-focus Airy disc
+  if (R > 0.5){
+    const oct = () => {
+      x.beginPath();
+      for (let i = 0; i < NB; i++){
+        const v = rot + i*step - step/2;
+        const px = Rv*Math.cos(v), py = Rv*Math.sin(v);
+        i ? x.lineTo(px, py) : x.moveTo(px, py);
+      }
+      x.closePath();
+    };
+    x.save();
+    oct(); x.clip();
+    x.fillStyle = '#0c111c'; x.fillRect(-w, -h, 2*w, 2*h);
+    let g = x.createRadialGradient(0, 0, 0, 0, 0, S*0.30);
+    g.addColorStop(0, 'rgba(255,80,220,0.32)'); g.addColorStop(1, 'rgba(255,80,220,0.04)');
+    x.fillStyle = g; x.beginPath(); x.arc(0, 0, S*0.30, 0, Math.PI*2); x.fill();
+    g = x.createRadialGradient(0, 0, 0, 0, 0, AU/2);
+    g.addColorStop(0, 'rgba(140,255,240,1)'); g.addColorStop(0.7, 'rgba(60,210,205,0.8)'); g.addColorStop(1, 'rgba(60,200,200,0.1)');
+    x.fillStyle = g; x.beginPath(); x.arc(0, 0, AU/2, 0, Math.PI*2); x.fill();
+    x.strokeStyle = 'rgba(100,230,220,0.35)'; x.lineWidth = 1.5;
+    x.beginPath(); x.arc(0, 0, AU*0.82, 0, Math.PI*2); x.stroke();
+    x.restore();
+    oct(); x.strokeStyle = '#1d2436'; x.lineWidth = 2; x.stroke();
+  }
+
+  // rim
+  x.strokeStyle = '#3f4a69'; x.lineWidth = S*0.02;
+  x.beginPath(); x.arc(0, 0, Rout, 0, Math.PI*2); x.stroke();
+  x.restore();
+}
+
+/* ============ Histogram ============ */
+function drawHist(){
+  const c = $('hist'), x = c.getContext('2d'), w = c.width, h = c.height;
+  x.clearRect(0, 0, w, h);
+  if (!lastBins || !w || !h) return;
+  const dpr = window.devicePixelRatio || 1;
+  const padB = 16*dpr, padT = 4*dpr, ph = h - padB - padT;
+  const log = $('logHist').checked;
+  const fn = v => log ? Math.log10(v + 1) : v;
+  let max = 0; for (let i = 0; i < 256; i++) max = Math.max(max, fn(lastBins[i]));
+  const bw = w / 256;
+  for (let i = 0; i < 256; i++){
+    const v = fn(lastBins[i]); if (!v) continue;
+    const bh = (v / max) * ph;
+    x.fillStyle = i === 255 ? '#ff3b3b' : '#6f86b8';
+    x.fillRect(i*bw, padT + ph - bh, Math.max(1, bw), bh);
+  }
+  x.strokeStyle = '#3b4766'; x.beginPath(); x.moveTo(0, padT + ph + .5); x.lineTo(w, padT + ph + .5); x.stroke();
+  x.fillStyle = '#9aa5bd'; x.font = (11*dpr) + 'px system-ui,sans-serif';
+  x.textAlign = 'left';  x.fillText('0', 2, h - 3*dpr);
+  x.textAlign = 'right'; x.fillText('255', w - 2, h - 3*dpr);
+}
+
+/* ============ Canvas sizing ============ */
+function sizeCanvases(){
+  const dpr = window.devicePixelRatio || 1;
+  for (const id of ['ph', 'hist']){
+    const c = $(id);
+    const w = Math.max(1, Math.round(c.clientWidth * dpr)), h = Math.max(1, Math.round(c.clientHeight * dpr));
+    if (c.width !== w || c.height !== h){ c.width = w; c.height = h; }
+  }
+  drawIris(parseFloat($('pinhole').value));
+  drawHist();
+}
+new ResizeObserver(sizeCanvases).observe($('irisPlot'));
+new ResizeObserver(sizeCanvases).observe($('histPlot'));
+
+/* ============ Mouse-wheel control for sliders ============ */
+function wheelify(el, input, step){
+  let accum = 0;
+  el.addEventListener('wheel', e => {
+    e.preventDefault();
+    if (input.disabled) return;
+    accum += e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY;
+    const n = Math.trunc(accum / 100);
+    if (!n) return;
+    accum -= n * 100;
+    const v = parseFloat(input.value) - n * step;
+    input.value = Math.min(+input.max, Math.max(+input.min, v));
+    schedule();
+  }, { passive: false });
+}
+wheelify($('focusCol'), $('focus'), 1);
+wheelify($('rowPin'),   $('pinhole'), 0.2);
+wheelify($('rowPow'),   $('power'), 0.2);
+
+/* ============ Wire up ============ */
+function syncAuto(){ $('power').disabled = $('auto').checked; }
+$('auto').addEventListener('change', () => { syncAuto(); schedule(); });
+['focus','pinhole','power','logHist'].forEach(id => $(id).addEventListener('input', schedule));
+syncAuto();
+sizeCanvases();
+loadStack(urlList());
+</script>
+</body>
+</html>
